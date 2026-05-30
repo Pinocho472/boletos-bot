@@ -35,8 +35,6 @@ def revisar_ticketmaster():
             venue     = venue_obj.get("name", "")
             pmin, pmax = _precio(ev)
             plaza     = detectar_plaza(ciudad, venue)
-            if plaza == "otra":
-                continue
             eventos.append({
                 "id":         ev.get("id", ""),
                 "nombre":     ev.get("name", ""),
