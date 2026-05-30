@@ -1,5 +1,10 @@
 import requests
-from config import FUENTES, CIUDADES, CIUDADES_ACTIVAS
+import os
+from config import CIUDADES, CIUDADES_ACTIVAS
+
+TM_API_KEY = os.environ.get("TM_API_KEY", "")
+TM_URL     = f"https://app.ticketmaster.com/discovery/v2/events.json?apikey={TM_API_KEY}&countryCode=MX&size=50"
+OCESA_URL  = "https://ocesa.com.mx/wp-json/wp/v2/posts?per_page=10&categories=eventos"
 
 HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
 
@@ -20,8 +25,9 @@ def _precio(ev):
 def revisar_ticketmaster():
     eventos = []
     try:
-        r = requests.get(FUENTES[0]["url"], headers=HEADERS, timeout=15)
+        r = requests.get(TM_URL, headers=HEADERS, timeout=15)
         if r.status_code != 200:
+            print(f"[Ticketmaster] Status: {r.status_code}")
             return []
         for ev in r.json().get("_embedded", {}).get("events", []):
             venue_obj = ev.get("_embedded", {}).get("venues", [{}])[0]
@@ -51,7 +57,7 @@ def revisar_ticketmaster():
 def revisar_ocesa():
     eventos = []
     try:
-        r = requests.get(FUENTES[1]["url"], headers=HEADERS, timeout=15)
+        r = requests.get(OCESA_URL, headers=HEADERS, timeout=15)
         if r.status_code != 200:
             return []
         for post in r.json():
