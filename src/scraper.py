@@ -1,123 +1,81 @@
 import requests
-import re
-import json
-from config import CIUDADES, CIUDADES_ACTIVAS
+import os
+from datetime import datetime, timedelta
 
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Accept-Language": "es-MX,es;q=0.9",
-}
+NEWS_API_KEY = os.environ.get("NEWS_API_KEY", "")
+NEWS_URL     = "https://newsapi.org/v2/everything"
 
-OCESA_URL = "https://ocesa.com.mx/wp-json/wp/v2/posts?per_page=20&categories=eventos"
+HEADERS = {"User-Agent": "Mozilla/5.0"}
 
-TM_URLS = {
-    "mty": "https://www.ticketmaster.com.mx/browse/mas-conciertos-catid-52/conciertos-rid-10001/monterrey-dma-803",
-    "cdmx": "https://www.ticketmaster.com.mx/browse/mas-conciertos-catid-52/conciertos-rid-10001/todo-mexico-dma-801",
-}
+QUERIES_MTY = [
+    "concierto Monterrey",
+    "boletos Monterrey concierto",
+    "preventa Monterrey",
+]
 
-def detectar_plaza(ciudad, venue=""):
-    texto = (ciudad + " " + venue).lower()
-    for clave, datos in CIUDADES.items():
-        if clave not in CIUDADES_ACTIVAS:
-            continue
-        if any(k in texto for k in datos["keywords"] + datos["venues"]):
-            return clave
-    return "otra"
+QUERIES_CDMX = [
+    "concierto CDMX",
+    "concierto Ciudad de Mexico",
+    "preventa CDMX boletos",
+]
 
-def revisar_ticketmaster():
-    eventos = []
-    for plaza, url in TM_URLS.items():
-        try:
-            r = requests.get(url, headers=HEADERS, timeout=20)
-            print(f"[TM-{plaza.upper()}] Status: {r.status_code}")
-            if r.status_code != 200:
-                continue
-
-            # Buscar JSON embebido en el HTML
-            match = re.search(r'__NEXT_DATA__\s*=\s*({.+?})\s*</script>', r.text, re.DOTALL)
-            if not match:
-                # Intentar parsear eventos desde el HTML directamente
-                # Buscar patrones de eventos en el HTML
-                nombres = re.findall(r'"name"\s*:\s*"([^"]{5,80})"', r.text)
-                fechas  = re.findall(r'"localDate"\s*:\s*"(\d{4}-\d{2}-\d{2})"', r.text)
-                ids     = re.findall(r'"id"\s*:\s*"([A-Z0-9]{16,})"', r.text)
-                
-                print(f"[TM-{plaza.upper()}] Encontrados {len(ids)} eventos via HTML")
-                for i, eid in enumerate(ids[:30]):
-                    eventos.append({
-                        "id":         f"tm_{plaza}_{eid}",
-                        "nombre":     nombres[i] if i < len(nombres) else f"Evento {eid}",
-                        "fecha":      fechas[i] if i < len(fechas) else "",
-                        "ciudad":     "Monterrey" if plaza == "mty" else "Ciudad de México",
-                        "venue":      "",
-                        "plaza":      plaza,
-                        "estado":     "onsale",
-                        "precio_min": None,
-                        "precio_max": None,
-                        "fuente":     "Ticketmaster MX",
-                        "url":        url
-                    })
-                continue
-
-            data = json.loads(match.group(1))
-            evs  = (data.get("props", {})
-                       .get("pageProps", {})
-                       .get("events", []))
-            print(f"[TM-{plaza.upper()}] Eventos en JSON: {len(evs)}")
-
-            for ev in evs:
-                venue   = ev.get("venue", {}).get("name", "")
-                ciudad  = ev.get("venue", {}).get("city", "")
-                eventos.append({
-                    "id":         ev.get("id", f"tm_{plaza}_{len(eventos)}"),
-                    "nombre":     ev.get("name", ""),
-                    "fecha":      ev.get("startDate", "")[:10],
-                    "ciudad":     ciudad,
-                    "venue":      venue,
-                    "plaza":      plaza,
-                    "estado":     "onsale" if not ev.get("soldOut") else "offsale",
-                    "precio_min": ev.get("minPrice"),
-                    "precio_max": ev.get("maxPrice"),
-                    "fuente":     "Ticketmaster MX",
-                    "url":        ev.get("url", url)
-                })
-        except Exception as e:
-            print(f"[TM-{plaza.upper()}] Error: {e}")
-    return eventos
-
-def revisar_ocesa():
+def buscar_noticias(query, plaza):
     eventos = []
     try:
-        r = requests.get(OCESA_URL, headers=HEADERS, timeout=15)
-        print(f"[OCESA] Status: {r.status_code}")
+        desde = (datetime.now() - timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%S")
+        params = {
+            "q":          query,
+            "language":   "es",
+            "sortBy":     "publishedAt",
+            "from":       desde,
+            "pageSize":   10,
+            "apiKey":     NEWS_API_KEY
+        }
+        r = requests.get(NEWS_URL, params=params, headers=HEADERS, timeout=15)
+        print(f"[NewsAPI] '{query}' → Status: {r.status_code}")
         if r.status_code != 200:
             return []
-        posts = r.json()
-        print(f"[OCESA] Posts: {len(posts)}")
-        for post in posts:
-            titulo = post.get("title", {}).get("rendered", "")
-            link   = post.get("link", "")
-            fecha  = post.get("date", "")[:10]
+        
+        articulos = r.json().get("articles", [])
+        print(f"[NewsAPI] '{query}' → {len(articulos)} noticias")
+        
+        for art in articulos:
+            titulo = art.get("title", "")
+            if not titulo or titulo == "[Removed]":
+                continue
             eventos.append({
-                "id":         f"ocesa_{post.get('id','')}",
+                "id":         f"news_{plaza}_{abs(hash(titulo))}",
                 "nombre":     titulo,
-                "fecha":      fecha,
-                "ciudad":     "Ciudad de México",
-                "venue":      "",
-                "plaza":      "cdmx",
+                "fecha":      art.get("publishedAt", "")[:10],
+                "ciudad":     "Monterrey" if plaza == "mty" else "Ciudad de México",
+                "venue":      art.get("source", {}).get("name", ""),
+                "plaza":      plaza,
                 "estado":     "onsale",
                 "precio_min": None,
                 "precio_max": None,
-                "fuente":     "OCESA",
-                "url":        link
+                "fuente":     f"📰 {art.get('source', {}).get('name', 'Noticia')}",
+                "url":        art.get("url", "")
             })
     except Exception as e:
-        print(f"[OCESA] Error: {e}")
+        print(f"[NewsAPI] Error: {e}")
     return eventos
 
 def obtener_todos():
-    tm = revisar_ticketmaster()
-    oc = revisar_ocesa()
-    print(f"[Total] TM:{len(tm)} OCESA:{len(oc)}")
-    return tm + oc
+    eventos = []
+    
+    for q in QUERIES_MTY:
+        eventos += buscar_noticias(q, "mty")
+    
+    for q in QUERIES_CDMX:
+        eventos += buscar_noticias(q, "cdmx")
+    
+    # Deduplicar por ID
+    vistos = set()
+    unicos = []
+    for ev in eventos:
+        if ev["id"] not in vistos:
+            vistos.add(ev["id"])
+            unicos.append(ev)
+    
+    print(f"[Total] {len(unicos)} noticias únicas de conciertos")
+    return unicos
