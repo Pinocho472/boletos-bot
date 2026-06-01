@@ -2,36 +2,25 @@ import requests
 from datetime import datetime
 from config import TELEGRAM_TOKEN, CHAT_ID, CIUDADES
 
-ESTADOS = {
-    "onsale":      "🟢 EN VENTA",
-    "offsale":     "🔴 AGOTADO",
-    "cancelled":   "❌ CANCELADO",
-    "postponed":   "⏳ POSPUESTO",
-    "rescheduled": "📅 REPROGRAMADO",
-}
-
 def _fmt_precio(mn, mx):
-    if mn and mx:   return f"💰 ${int(mn):,} - ${int(mx):,} MXN"
-    if mn:          return f"💰 Desde ${int(mn):,} MXN"
-    return "💰 Precio no disponible"
+    if mn and mx: return f"💰 ${int(mn):,} - ${int(mx):,} MXN"
+    if mn:        return f"💰 Desde ${int(mn):,} MXN"
+    return ""
 
 def _fmt_plaza(plaza):
     return CIUDADES.get(plaza, {}).get("label", "📍 México")
 
 def construir_mensaje(evento, tipo):
-    header     = "🎫 <b>NUEVO EVENTO</b>" if tipo == "NUEVO" else "🔥 <b>¡BOLETOS DISPONIBLES!</b>"
-    venue_line = f"🏟 {evento['venue']}\n" if evento.get("venue") else ""
+    header = "🎫 <b>NUEVO EVENTO</b>" if tipo == "NUEVO" else "🔥 <b>¡BOLETOS DISPONIBLES!</b>"
+    precio = _fmt_precio(evento.get('precio_min'), evento.get('precio_max'))
+    precio_line = f"{precio}\n" if precio else ""
     return (
         f"{header} {_fmt_plaza(evento.get('plaza','otra'))}\n\n"
         f"🎤 <b>{evento['nombre']}</b>\n"
         f"📅 {evento['fecha']}\n"
         f"📍 {evento['ciudad']}\n"
-        f"{venue_line}"
-        f"{ESTADOS.get(evento['estado'], evento['estado'])}\n"
-        f"{_fmt_precio(evento.get('precio_min'), evento.get('precio_max'))}\n"
-        f"🌐 {evento['fuente']}\n"
-        f"🔗 {evento['url']}\n\n"
-        f"⏰ {datetime.now().strftime('%d/%m/%Y %H:%M')}"
+        f"{precio_line}"
+        f"🔗 {evento['url']}"
     )
 
 def enviar(mensaje):
@@ -58,3 +47,4 @@ def enviar_stats(s):
         f"🔥 Boletos liberados: {s['disponibles']}\n\n"
         f"<b>Por plaza:</b>\n{por_plaza or '  Sin datos aún'}"
     )
+
