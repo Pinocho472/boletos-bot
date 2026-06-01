@@ -5,14 +5,16 @@ from config import CIUDADES, CIUDADES_ACTIVAS
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
-    "Accept": "application/json, text/plain, */*",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "es-MX,es;q=0.9",
-    "Referer": "https://www.ticketmaster.com.mx/"
 }
 
 OCESA_URL = "https://ocesa.com.mx/wp-json/wp/v2/posts?per_page=20&categories=eventos"
 
-TM_SEARCH_URL = "https://www.ticketmaster.com.mx/api/2.0/search?q=&lat=25.6866&long=-100.3161&radius=200&unit=km&size=50&page=0"
+TM_URLS = {
+    "mty": "https://www.ticketmaster.com.mx/browse/mas-conciertos-catid-52/conciertos-rid-10001/monterrey-dma-803",
+    "cdmx": "https://www.ticketmaster.com.mx/browse/mas-conciertos-catid-52/conciertos-rid-10001/todo-mexico-dma-801",
+}
 
 def detectar_plaza(ciudad, venue=""):
     texto = (ciudad + " " + venue).lower()
@@ -23,47 +25,65 @@ def detectar_plaza(ciudad, venue=""):
             return clave
     return "otra"
 
-def _precio(ev):
-    if "priceRanges" in ev:
-        return ev["priceRanges"][0].get("min"), ev["priceRanges"][0].get("max")
-    return None, None
-
 def revisar_ticketmaster():
     eventos = []
-    urls = [
-        "https://www.ticketmaster.com.mx/api/2.0/search?q=&city=Monterrey&size=50&page=0",
-        "https://www.ticketmaster.com.mx/api/2.0/search?q=&city=Mexico&size=50&page=0",
-    ]
-    for url in urls:
+    for plaza, url in TM_URLS.items():
         try:
-            r = requests.get(url, headers=HEADERS, timeout=15)
-            print(f"[Ticketmaster] Status: {r.status_code} | URL: {url[:60]}")
+            r = requests.get(url, headers=HEADERS, timeout=20)
+            print(f"[TM-{plaza.upper()}] Status: {r.status_code}")
             if r.status_code != 200:
                 continue
-            data = r.json()
-            evs = data.get("_embedded", {}).get("events", [])
-            print(f"[Ticketmaster] Eventos encontrados: {len(evs)}")
+
+            # Buscar JSON embebido en el HTML
+            match = re.search(r'__NEXT_DATA__\s*=\s*({.+?})\s*</script>', r.text, re.DOTALL)
+            if not match:
+                # Intentar parsear eventos desde el HTML directamente
+                # Buscar patrones de eventos en el HTML
+                nombres = re.findall(r'"name"\s*:\s*"([^"]{5,80})"', r.text)
+                fechas  = re.findall(r'"localDate"\s*:\s*"(\d{4}-\d{2}-\d{2})"', r.text)
+                ids     = re.findall(r'"id"\s*:\s*"([A-Z0-9]{16,})"', r.text)
+                
+                print(f"[TM-{plaza.upper()}] Encontrados {len(ids)} eventos via HTML")
+                for i, eid in enumerate(ids[:30]):
+                    eventos.append({
+                        "id":         f"tm_{plaza}_{eid}",
+                        "nombre":     nombres[i] if i < len(nombres) else f"Evento {eid}",
+                        "fecha":      fechas[i] if i < len(fechas) else "",
+                        "ciudad":     "Monterrey" if plaza == "mty" else "Ciudad de México",
+                        "venue":      "",
+                        "plaza":      plaza,
+                        "estado":     "onsale",
+                        "precio_min": None,
+                        "precio_max": None,
+                        "fuente":     "Ticketmaster MX",
+                        "url":        url
+                    })
+                continue
+
+            data = json.loads(match.group(1))
+            evs  = (data.get("props", {})
+                       .get("pageProps", {})
+                       .get("events", []))
+            print(f"[TM-{plaza.upper()}] Eventos en JSON: {len(evs)}")
+
             for ev in evs:
-                venue_obj = ev.get("_embedded", {}).get("venues", [{}])[0]
-                ciudad    = venue_obj.get("city", {}).get("name", "")
-                venue     = venue_obj.get("name", "")
-                pmin, pmax = _precio(ev)
-                plaza     = detectar_plaza(ciudad, venue)
+                venue   = ev.get("venue", {}).get("name", "")
+                ciudad  = ev.get("venue", {}).get("city", "")
                 eventos.append({
-                    "id":         ev.get("id", ""),
+                    "id":         ev.get("id", f"tm_{plaza}_{len(eventos)}"),
                     "nombre":     ev.get("name", ""),
-                    "fecha":      ev.get("dates", {}).get("start", {}).get("localDate", ""),
+                    "fecha":      ev.get("startDate", "")[:10],
                     "ciudad":     ciudad,
                     "venue":      venue,
                     "plaza":      plaza,
-                    "estado":     ev.get("dates", {}).get("status", {}).get("code", ""),
-                    "precio_min": pmin,
-                    "precio_max": pmax,
+                    "estado":     "onsale" if not ev.get("soldOut") else "offsale",
+                    "precio_min": ev.get("minPrice"),
+                    "precio_max": ev.get("maxPrice"),
                     "fuente":     "Ticketmaster MX",
-                    "url":        ev.get("url", "https://ticketmaster.com.mx")
+                    "url":        ev.get("url", url)
                 })
         except Exception as e:
-            print(f"[Ticketmaster] Error: {e}")
+            print(f"[TM-{plaza.upper()}] Error: {e}")
     return eventos
 
 def revisar_ocesa():
@@ -74,7 +94,7 @@ def revisar_ocesa():
         if r.status_code != 200:
             return []
         posts = r.json()
-        print(f"[OCESA] Posts encontrados: {len(posts)}")
+        print(f"[OCESA] Posts: {len(posts)}")
         for post in posts:
             titulo = post.get("title", {}).get("rendered", "")
             link   = post.get("link", "")
@@ -97,7 +117,7 @@ def revisar_ocesa():
     return eventos
 
 def obtener_todos():
-    tm  = revisar_ticketmaster()
-    oc  = revisar_ocesa()
-    print(f"[Total] TM: {len(tm)} | OCESA: {len(oc)}")
+    tm = revisar_ticketmaster()
+    oc = revisar_ocesa()
+    print(f"[Total] TM:{len(tm)} OCESA:{len(oc)}")
     return tm + oc
